@@ -1,5 +1,6 @@
 """
 Utility functions for video processing
+Enhanced with better error handling and logging
 """
 
 import os
@@ -30,11 +31,24 @@ def upload_to_bigshare(video_path=None, video_url=None):
     Returns:
         BigShare link or None if failed
     """
-    headers = {"Authorization": f"Bearer {BIGSHARE_TOKEN}"}
+    
+    # Verify token exists
+    if not BIGSHARE_TOKEN or BIGSHARE_TOKEN == "your_bigshare_api_token":
+        print("❌ BigShare token not configured!")
+        return None
+    
+    headers = {
+        "Authorization": f"Bearer {BIGSHARE_TOKEN}",
+        "User-Agent": "BigShare-Bot/1.0"
+    }
     
     try:
         if video_path:
             print(f"📤 Uploading file to BigShare...")
+            print(f"   File: {video_path}")
+            print(f"   API: {BIGSHARE_API_URL}")
+            print(f"   Token: {BIGSHARE_TOKEN[:20]}...")
+            
             with open(video_path, 'rb') as f:
                 files = {'file': f}
                 response = requests.post(
@@ -43,8 +57,12 @@ def upload_to_bigshare(video_path=None, video_url=None):
                     files=files,
                     timeout=600
                 )
+                
         elif video_url:
             print(f"📤 Uploading URL to BigShare...")
+            print(f"   URL: {video_url}")
+            print(f"   API: {BIGSHARE_API_URL}")
+            
             data = {'url': video_url}
             response = requests.post(
                 BIGSHARE_API_URL,
@@ -53,18 +71,61 @@ def upload_to_bigshare(video_path=None, video_url=None):
                 timeout=600
             )
         else:
+            print("❌ No video path or URL provided")
             return None
         
+        print(f"   Response Status: {response.status_code}")
+        print(f"   Response Headers: {dict(response.headers)}")
+        
+        # Check if response is HTML (login page)
+        content_type = response.headers.get('Content-Type', '')
+        if 'text/html' in content_type:
+            print("❌ BigShare returned HTML instead of JSON!")
+            print("   This usually means authentication failed")
+            print(f"   Response preview: {response.text[:200]}...")
+            return None
+        
+        # Try to parse JSON response
         if response.status_code == 200:
-            link = response.json().get('url') or response.json().get('link')
-            print(f"✅ BigShare upload successful!")
-            return link
+            try:
+                json_response = response.json()
+                print(f"   JSON Response: {json_response}")
+                
+                # Try different possible response formats
+                link = (
+                    json_response.get('url') or 
+                    json_response.get('link') or 
+                    json_response.get('file_url') or
+                    json_response.get('data', {}).get('url')
+                )
+                
+                if link:
+                    print(f"✅ BigShare upload successful!")
+                    print(f"   Link: {link}")
+                    return link
+                else:
+                    print(f"❌ No URL found in response: {json_response}")
+                    return None
+                    
+            except ValueError as e:
+                print(f"❌ Invalid JSON response: {e}")
+                print(f"   Response text: {response.text[:500]}")
+                return None
         else:
-            print(f"❌ BigShare upload failed: {response.text}")
+            print(f"❌ BigShare upload failed with status {response.status_code}")
+            print(f"   Response: {response.text[:500]}")
             return None
             
+    except requests.exceptions.Timeout:
+        print(f"❌ Upload timeout (exceeded 10 minutes)")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        print(f"❌ Connection error: {e}")
+        return None
     except Exception as e:
         print(f"❌ Upload error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 # ============================================
@@ -187,3 +248,4 @@ def get_file_size_mb(file_path):
         size_mb = size_bytes / (1024 * 1024)
         return f"{size_mb:.2f} MB"
     return "Unknown"
+        
