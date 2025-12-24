@@ -4,6 +4,7 @@ Automated video posting system with BigShare integration
 """
 
 from pyrogram import Client
+from pyrogram.errors import FloodWait
 from config import API_ID, API_HASH, BOT_TOKEN, validate_config
 from handlers import setup_handlers
 from admin import setup_admin_commands
@@ -11,6 +12,7 @@ from scheduler import run_scheduler, set_app_instance
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
+import time
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     """Simple health check endpoint for Koyeb"""
@@ -46,7 +48,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'Not Found')
     
     def log_message(self, format, *args):
-        # Suppress access logs to keep console clean
         pass
 
 def run_health_server():
@@ -71,12 +72,13 @@ def main():
     
     print("Configuration validated")
     
-    # Create Pyrogram client
+    # Create Pyrogram client with session persistence
     app = Client(
         "bigshare_bot",
         api_id=API_ID,
         api_hash=API_HASH,
-        bot_token=BOT_TOKEN
+        bot_token=BOT_TOKEN,
+        workdir="."  # Save session in current directory
     )
     
     # Set app instance for scheduler
@@ -102,16 +104,45 @@ def main():
     print("Health check server active on port", os.getenv('PORT', 8000))
     print("\nPress Ctrl+C to stop\n")
     
-    # Run the bot
-    app.run()
+    # Run the bot with flood wait handling
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            app.run()
+            break  # Success, exit loop
+            
+        except FloodWait as e:
+            wait_time = e.value
+            retry_count += 1
+            print(f"\nFlood Wait: Telegram requires {wait_time} seconds wait")
+            print(f"Attempt {retry_count}/{max_retries}")
+            print(f"Waiting {wait_time + 5} seconds before retry...")
+            
+            if retry_count >= max_retries:
+                print("\nMax retries reached. Please wait a few minutes and redeploy.")
+                print("Keeping health server alive...")
+                # Keep health server running
+                while True:
+                    time.sleep(60)
+            else:
+                time.sleep(wait_time + 5)
+                
+        except KeyboardInterrupt:
+            print("\n\nBot stopped by user")
+            break
+            
+        except Exception as e:
+            print(f"\n\nFatal error: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Keep health server alive to prevent restart loop
+            print("\nKeeping health server alive...")
+            while True:
+                time.sleep(60)
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\nBot stopped by user")
-    except Exception as e:
-        print(f"\n\nFatal error: {e}")
-        import traceback
-        traceback.print_exc()
+    main()
     
