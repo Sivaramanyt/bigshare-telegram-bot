@@ -1,13 +1,12 @@
 """
 Utility functions for video processing
-Enhanced with better error handling and logging
+Fixed with correct BigShare API authentication
 """
 
 import os
 import subprocess
 import requests
 from config import (
-    BIGSHARE_API_URL,
     BIGSHARE_TOKEN,
     THUMBNAIL_TIMESTAMP,
     THUMBNAIL_WIDTH,
@@ -16,6 +15,9 @@ from config import (
     TEMP_THUMBNAIL_PATH
 )
 
+# Correct BigShare API endpoint
+BIGSHARE_API_URL = "https://bigshare.io/api/v1/videos/files"
+
 # ============================================
 # BIGSHARE OPERATIONS
 # ============================================
@@ -23,6 +25,7 @@ from config import (
 def upload_to_bigshare(video_path=None, video_url=None):
     """
     Upload video to BigShare API
+    Uses correct authentication from BigShare documentation
     
     Args:
         video_path: Path to local video file
@@ -32,27 +35,33 @@ def upload_to_bigshare(video_path=None, video_url=None):
         BigShare link or None if failed
     """
     
-    # Verify token exists
-    if not BIGSHARE_TOKEN or BIGSHARE_TOKEN == "your_bigshare_api_token":
+    if not BIGSHARE_TOKEN:
         print("❌ BigShare token not configured!")
         return None
     
+    # Correct headers from BigShare documentation
     headers = {
-        "Authorization": f"Bearer {BIGSHARE_TOKEN}",
-        "User-Agent": "BigShare-Bot/1.0"
+        "api_key": BIGSHARE_TOKEN,
+        "token": BIGSHARE_TOKEN
     }
+    
+    # API endpoint with api_key parameter
+    api_url = f"{BIGSHARE_API_URL}?api_key={BIGSHARE_TOKEN}"
     
     try:
         if video_path:
             print(f"📤 Uploading file to BigShare...")
             print(f"   File: {video_path}")
-            print(f"   API: {BIGSHARE_API_URL}")
-            print(f"   Token: {BIGSHARE_TOKEN[:20]}...")
+            print(f"   API: {api_url}")
             
+            # Upload file using multipart/form-data
             with open(video_path, 'rb') as f:
-                files = {'file': f}
+                files = {
+                    'file': (os.path.basename(video_path), f, 'video/mp4')
+                }
+                
                 response = requests.post(
-                    BIGSHARE_API_URL,
+                    api_url,
                     headers=headers,
                     files=files,
                     timeout=600
@@ -61,13 +70,18 @@ def upload_to_bigshare(video_path=None, video_url=None):
         elif video_url:
             print(f"📤 Uploading URL to BigShare...")
             print(f"   URL: {video_url}")
-            print(f"   API: {BIGSHARE_API_URL}")
             
-            data = {'url': video_url}
+            # For URL upload, use the uploadUrl endpoint
+            url_upload_endpoint = f"https://bigshare.io/api/v1/videos/uploadUrl?api_key={BIGSHARE_TOKEN}"
+            
+            data = {
+                'url': video_url
+            }
+            
             response = requests.post(
-                BIGSHARE_API_URL,
+                url_upload_endpoint,
                 headers=headers,
-                data=data,
+                json=data,
                 timeout=600
             )
         else:
@@ -75,28 +89,30 @@ def upload_to_bigshare(video_path=None, video_url=None):
             return None
         
         print(f"   Response Status: {response.status_code}")
-        print(f"   Response Headers: {dict(response.headers)}")
+        print(f"   Content-Type: {response.headers.get('Content-Type')}")
         
-        # Check if response is HTML (login page)
+        # Check if response is HTML (error page)
         content_type = response.headers.get('Content-Type', '')
         if 'text/html' in content_type:
             print("❌ BigShare returned HTML instead of JSON!")
-            print("   This usually means authentication failed")
-            print(f"   Response preview: {response.text[:200]}...")
+            print(f"   Response preview: {response.text[:200]}")
             return None
         
-        # Try to parse JSON response
-        if response.status_code == 200:
+        # Parse JSON response
+        if response.status_code == 200 or response.status_code == 201:
             try:
                 json_response = response.json()
                 print(f"   JSON Response: {json_response}")
                 
-                # Try different possible response formats
+                # Extract link from response
+                # Based on documentation, response format may vary
                 link = (
                     json_response.get('url') or 
                     json_response.get('link') or 
                     json_response.get('file_url') or
-                    json_response.get('data', {}).get('url')
+                    json_response.get('video_url') or
+                    json_response.get('data', {}).get('url') or
+                    json_response.get('data', {}).get('link')
                 )
                 
                 if link:
@@ -104,7 +120,8 @@ def upload_to_bigshare(video_path=None, video_url=None):
                     print(f"   Link: {link}")
                     return link
                 else:
-                    print(f"❌ No URL found in response: {json_response}")
+                    print(f"❌ No URL found in response")
+                    print(f"   Full response: {json_response}")
                     return None
                     
             except ValueError as e:
@@ -112,7 +129,7 @@ def upload_to_bigshare(video_path=None, video_url=None):
                 print(f"   Response text: {response.text[:500]}")
                 return None
         else:
-            print(f"❌ BigShare upload failed with status {response.status_code}")
+            print(f"❌ Upload failed with status {response.status_code}")
             print(f"   Response: {response.text[:500]}")
             return None
             
@@ -248,4 +265,4 @@ def get_file_size_mb(file_path):
         size_mb = size_bytes / (1024 * 1024)
         return f"{size_mb:.2f} MB"
     return "Unknown"
-        
+                
