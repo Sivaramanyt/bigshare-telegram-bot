@@ -1,13 +1,14 @@
 """
 Utility functions for video processing
-Fixed with correct BigShare API authentication
+StreamFlash.sx integration
 """
 
 import os
 import subprocess
 import requests
 from config import (
-    BIGSHARE_TOKEN,
+    STREAMFLASH_API_URL,
+    STREAMFLASH_API_KEY,
     THUMBNAIL_TIMESTAMP,
     THUMBNAIL_WIDTH,
     FFMPEG_PATH,
@@ -15,126 +16,111 @@ from config import (
     TEMP_THUMBNAIL_PATH
 )
 
-# Correct BigShare API endpoint
-BIGSHARE_API_URL = "https://bigshare.io/api/v1/videos/files"
-
 # ============================================
-# BIGSHARE OPERATIONS
+# STREAMFLASH OPERATIONS
 # ============================================
 
-def upload_to_bigshare(video_path=None, video_url=None):
+def upload_to_streamflash(video_path=None, video_url=None):
     """
-    Upload video to BigShare API
-    Uses correct authentication from BigShare documentation
+    Upload video to StreamFlash API
     
     Args:
-        video_path: Path to local video file
+        video_path: Path to local video file (will be uploaded to get URL first)
         video_url: Direct download URL
         
     Returns:
-        BigShare link or None if failed
+        StreamFlash link or None if failed
     """
     
-    if not BIGSHARE_TOKEN:
-        print("❌ BigShare token not configured!")
+    if not STREAMFLASH_API_KEY:
+        print("❌ StreamFlash API key not configured!")
         return None
     
-    # Correct headers from BigShare documentation
-    headers = {
-        "api_key": BIGSHARE_TOKEN,
-        "token": BIGSHARE_TOKEN
-    }
+    # StreamFlash API requires video URL, not file upload
+    # So if we have a file path, we need to get its Telegram URL
+    if video_path and not video_url:
+        print("⚠️ StreamFlash requires URL upload")
+        print("   File upload not supported, need Telegram file URL")
+        return None
     
-    # API endpoint with api_key parameter
-    api_url = f"{BIGSHARE_API_URL}?api_key={BIGSHARE_TOKEN}"
+    if not video_url:
+        print("❌ No video URL provided")
+        return None
     
     try:
-        if video_path:
-            print(f"📤 Uploading file to BigShare...")
-            print(f"   File: {video_path}")
-            print(f"   API: {api_url}")
-            
-            # Upload file using multipart/form-data
-            with open(video_path, 'rb') as f:
-                files = {
-                    'file': (os.path.basename(video_path), f, 'video/mp4')
-                }
-                
-                response = requests.post(
-                    api_url,
-                    headers=headers,
-                    files=files,
-                    timeout=600
-                )
-                
-        elif video_url:
-            print(f"📤 Uploading URL to BigShare...")
-            print(f"   URL: {video_url}")
-            
-            # For URL upload, use the uploadUrl endpoint
-            url_upload_endpoint = f"https://bigshare.io/api/v1/videos/uploadUrl?api_key={BIGSHARE_TOKEN}"
-            
-            data = {
-                'url': video_url
-            }
-            
-            response = requests.post(
-                url_upload_endpoint,
-                headers=headers,
-                json=data,
-                timeout=600
-            )
-        else:
-            print("❌ No video path or URL provided")
-            return None
+        print(f"📤 Uploading to StreamFlash...")
+        print(f"   URL: {video_url}")
+        print(f"   API: {STREAMFLASH_API_URL}")
+        
+        headers = {
+            "Authorization": f"Bearer {STREAMFLASH_API_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": "StreamFlash-Bot/1.0"
+        }
+        
+        payload = {
+            "url": video_url
+        }
+        
+        response = requests.post(
+            STREAMFLASH_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
         
         print(f"   Response Status: {response.status_code}")
-        print(f"   Content-Type: {response.headers.get('Content-Type')}")
+        print(f"   Content-Type: {response.headers.get('Content-Type', 'unknown')}")
         
-        # Check if response is HTML (error page)
-        content_type = response.headers.get('Content-Type', '')
-        if 'text/html' in content_type:
-            print("❌ BigShare returned HTML instead of JSON!")
-            print(f"   Response preview: {response.text[:200]}")
+        # Check for errors
+        if response.status_code == 401:
+            print("❌ Authentication failed - Check API key")
             return None
         
-        # Parse JSON response
-        if response.status_code == 200 or response.status_code == 201:
+        if response.status_code == 404:
+            print("❌ Endpoint not found")
+            return None
+        
+        if response.status_code == 503:
+            print("❌ Service unavailable")
+            return None
+        
+        # Parse response
+        if response.status_code in [200, 201]:
             try:
                 json_response = response.json()
-                print(f"   JSON Response: {json_response}")
+                print(f"   Response: {json_response}")
                 
-                # Extract link from response
-                # Based on documentation, response format may vary
-                link = (
-                    json_response.get('url') or 
-                    json_response.get('link') or 
-                    json_response.get('file_url') or
-                    json_response.get('video_url') or
-                    json_response.get('data', {}).get('url') or
-                    json_response.get('data', {}).get('link')
-                )
-                
-                if link:
-                    print(f"✅ BigShare upload successful!")
-                    print(f"   Link: {link}")
-                    return link
+                # Check if upload was successful
+                if json_response.get("success"):
+                    batch_id = json_response.get("batch_id")
+                    queued = json_response.get("queued", 0)
+                    
+                    print(f"✅ Upload queued successfully!")
+                    print(f"   Batch ID: {batch_id}")
+                    print(f"   Queued: {queued}")
+                    
+                    # Need to check upload status to get final URL
+                    # For now, return a placeholder or check status
+                    video_link = get_upload_status(batch_id)
+                    
+                    return video_link
                 else:
-                    print(f"❌ No URL found in response")
-                    print(f"   Full response: {json_response}")
+                    print(f"❌ Upload failed")
+                    print(f"   Response: {json_response}")
                     return None
                     
             except ValueError as e:
-                print(f"❌ Invalid JSON response: {e}")
-                print(f"   Response text: {response.text[:500]}")
+                print(f"❌ Invalid JSON: {e}")
+                print(f"   Response: {response.text[:500]}")
                 return None
         else:
-            print(f"❌ Upload failed with status {response.status_code}")
+            print(f"❌ Upload failed: Status {response.status_code}")
             print(f"   Response: {response.text[:500]}")
             return None
             
     except requests.exceptions.Timeout:
-        print(f"❌ Upload timeout (exceeded 10 minutes)")
+        print(f"❌ Upload timeout")
         return None
     except requests.exceptions.ConnectionError as e:
         print(f"❌ Connection error: {e}")
@@ -145,21 +131,118 @@ def upload_to_bigshare(video_path=None, video_url=None):
         traceback.print_exc()
         return None
 
+def get_upload_status(batch_id):
+    """
+    Check upload status on StreamFlash
+    
+    Args:
+        batch_id: Batch ID from remote upload
+        
+    Returns:
+        Video URL when ready, or None
+    """
+    
+    if not batch_id:
+        return None
+    
+    try:
+        # According to API docs: GET https://streamflash.sx/api/upload_status.php?api_key=KEY&batch_id=123
+        status_url = f"https://streamflash.sx/api/upload_status.php?api_key={STREAMFLASH_API_KEY}&batch_id={batch_id}"
+        
+        print(f"   Checking upload status...")
+        
+        # Poll for status (wait up to 60 seconds)
+        import time
+        max_attempts = 12  # 12 attempts * 5 seconds = 60 seconds
+        
+        for attempt in range(max_attempts):
+            response = requests.get(status_url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data.get("success"):
+                    items = data.get("items", [])
+                    
+                    if items:
+                        # Get first completed item
+                        for item in items:
+                            if item.get("status") == "done":
+                                video_url = item.get("url")
+                                video_id = item.get("video_id")
+                                
+                                print(f"✅ Upload completed!")
+                                print(f"   Video ID: {video_id}")
+                                print(f"   URL: {video_url}")
+                                
+                                return video_url
+                        
+                        # Check if still processing
+                        if any(item.get("status") == "processing" for item in items):
+                            print(f"   Still processing... (attempt {attempt + 1}/{max_attempts})")
+                            time.sleep(5)
+                            continue
+                        
+                        # Check for errors
+                        errors = [item for item in items if item.get("errors", 0) > 0]
+                        if errors:
+                            print(f"❌ Upload had errors: {errors}")
+                            return None
+            
+            time.sleep(5)
+        
+        print(f"⚠️ Upload status check timeout")
+        return None
+        
+    except Exception as e:
+        print(f"❌ Status check error: {e}")
+        return None
+
+# ============================================
+# TELEGRAM FILE URL OPERATIONS
+# ============================================
+
+async def get_telegram_file_link(client, message):
+    """
+    Get Telegram file link for video
+    StreamFlash needs a direct URL to download from
+    
+    Args:
+        client: Pyrogram client
+        message: Message with video/document
+        
+    Returns:
+        Telegram file URL or None
+    """
+    try:
+        # Get file
+        if message.video:
+            file = message.video
+        elif message.document:
+            file = message.document
+        else:
+            return None
+        
+        # Get file path
+        file_id = file.file_id
+        
+        # Download to temp and re-upload to get public URL
+        # OR use file.file_unique_id to construct Telegram CDN URL
+        
+        # For now, we'll download the file
+        print(f"   Getting Telegram file for remote upload...")
+        return None  # Will handle in handlers.py
+        
+    except Exception as e:
+        print(f"❌ Error getting file link: {e}")
+        return None
+
 # ============================================
 # THUMBNAIL OPERATIONS
 # ============================================
 
 def extract_thumbnail(video_path, output_filename=None):
-    """
-    Extract thumbnail from video using FFmpeg
-    
-    Args:
-        video_path: Path to video file
-        output_filename: Custom output filename (optional)
-        
-    Returns:
-        Path to thumbnail or None if failed
-    """
+    """Extract thumbnail from video using FFmpeg"""
     if not output_filename:
         output_filename = f"thumb_{os.path.basename(video_path)}.jpg"
     
@@ -187,14 +270,14 @@ def extract_thumbnail(video_path, output_filename=None):
             print(f"✅ Thumbnail extracted: {output_path}")
             return output_path
         else:
-            print(f"❌ Thumbnail file not created")
+            print(f"❌ Thumbnail not created")
             return None
             
     except subprocess.CalledProcessError as e:
         print(f"❌ FFmpeg error: {e.stderr}")
         return None
     except Exception as e:
-        print(f"❌ Thumbnail extraction error: {e}")
+        print(f"❌ Thumbnail error: {e}")
         return None
 
 # ============================================
@@ -202,15 +285,7 @@ def extract_thumbnail(video_path, output_filename=None):
 # ============================================
 
 def extract_direct_link(message):
-    """
-    Extract direct download link from message
-    
-    Args:
-        message: Pyrogram message object
-        
-    Returns:
-        URL string or None
-    """
+    """Extract direct download link from message"""
     text = message.text or message.caption or ""
     
     for word in text.split():
@@ -220,22 +295,12 @@ def extract_direct_link(message):
     return None
 
 def extract_video_title(message):
-    """
-    Extract video title from message caption
-    
-    Args:
-        message: Pyrogram message object
-        
-    Returns:
-        Video title string
-    """
+    """Extract video title from message caption"""
     if message.caption:
-        # Take first line as title
         title = message.caption.split('\n')[0]
-        # Remove URLs from title
         words = title.split()
         title = ' '.join([w for w in words if not w.startswith('http')])
-        return title[:100]  # Max 100 chars
+        return title[:100]
     
     return "Adult Video"
 
@@ -244,19 +309,14 @@ def extract_video_title(message):
 # ============================================
 
 def cleanup_temp_files(*file_paths):
-    """
-    Clean up temporary files
-    
-    Args:
-        *file_paths: Variable number of file paths to delete
-    """
+    """Clean up temporary files"""
     for file_path in file_paths:
         if file_path and os.path.exists(file_path):
             try:
                 os.remove(file_path)
                 print(f"🗑️ Cleaned up: {file_path}")
             except Exception as e:
-                print(f"⚠️ Cleanup failed for {file_path}: {e}")
+                print(f"⚠️ Cleanup failed: {file_path}: {e}")
 
 def get_file_size_mb(file_path):
     """Get file size in MB"""
@@ -265,4 +325,4 @@ def get_file_size_mb(file_path):
         size_mb = size_bytes / (1024 * 1024)
         return f"{size_mb:.2f} MB"
     return "Unknown"
-                
+        
