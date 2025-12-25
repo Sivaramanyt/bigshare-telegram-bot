@@ -1,18 +1,54 @@
 """
-BigShare Telegram Bot - Main Entry Point
-Automated video posting system with BigShare integration
+StreamFlash Telegram Bot - Main Entry Point
+Enhanced with startup error handling
 """
 
-from pyrogram import Client
-from pyrogram.errors import FloodWait
-from config import API_ID, API_HASH, BOT_TOKEN, validate_config
-from handlers import setup_handlers
-from admin import setup_admin_commands
-from scheduler import run_scheduler, set_app_instance
-from threading import Thread
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import os
-import time
+import sys
+import traceback
+
+# Print Python version and environment info
+print("="*60)
+print("🚀 BOT STARTUP")
+print("="*60)
+print(f"Python Version: {sys.version}")
+print(f"Platform: {sys.platform}")
+print("="*60)
+
+try:
+    print("\n📦 Importing modules...")
+    
+    from pyrogram import Client
+    print("✅ Pyrogram imported")
+    
+    from config import API_ID, API_HASH, BOT_TOKEN, validate_config
+    print("✅ Config imported")
+    
+    from handlers import setup_handlers
+    print("✅ Handlers imported")
+    
+    from admin import setup_admin_commands
+    print("✅ Admin imported")
+    
+    from scheduler import run_scheduler, set_app_instance
+    print("✅ Scheduler imported")
+    
+    from threading import Thread
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import os
+    print("✅ Standard libraries imported")
+    
+    print("\n✅ All imports successful!\n")
+
+except ImportError as e:
+    print(f"\n❌ IMPORT ERROR!")
+    print(f"Error: {e}")
+    traceback.print_exc()
+    sys.exit(1)
+except Exception as e:
+    print(f"\n❌ UNEXPECTED ERROR DURING IMPORT!")
+    print(f"Error: {e}")
+    traceback.print_exc()
+    sys.exit(1)
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     """Simple health check endpoint for Koyeb"""
@@ -26,11 +62,11 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             <html>
             <head>
                 <meta charset="UTF-8">
-                <title>BigShare Bot Status</title>
+                <title>StreamFlash Bot Status</title>
             </head>
             <body style="font-family: Arial; padding: 20px; background: #f0f0f0;">
                 <div style="background: white; padding: 30px; border-radius: 10px; max-width: 600px; margin: 0 auto;">
-                    <h1 style="color: #4CAF50;">BigShare Telegram Bot</h1>
+                    <h1 style="color: #4CAF50;">StreamFlash Telegram Bot</h1>
                     <p style="color: green; font-size: 20px;">Status: RUNNING</p>
                     <p>Health Check: OK</p>
                     <p>Service: Active</p>
@@ -48,101 +84,111 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'Not Found')
     
     def log_message(self, format, *args):
+        # Suppress access logs
         pass
 
 def run_health_server():
     """Run health check server for Koyeb"""
-    port = int(os.getenv('PORT', 8000))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    print(f"Health check server running on port {port}")
-    server.serve_forever()
+    try:
+        port = int(os.getenv('PORT', 8000))
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        print(f"🏥 Health check server running on port {port}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"❌ Health server error: {e}")
+        traceback.print_exc()
 
 def main():
     """Main function to start the bot"""
     
-    print("\n" + "="*50)
-    print("BIGSHARE TELEGRAM BOT")
-    print("="*50)
-    
-    # Validate configuration
-    if not validate_config():
-        print("\nPlease configure .env file properly")
-        print("Copy .env.example to .env and fill in your details")
-        return
-    
-    print("Configuration validated")
-    
-    # Create Pyrogram client with session persistence
-    app = Client(
-        "bigshare_bot",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        bot_token=BOT_TOKEN,
-        workdir="."  # Save session in current directory
-    )
-    
-    # Set app instance for scheduler
-    set_app_instance(app)
-    
-    # Setup handlers and commands
-    setup_handlers(app)
-    setup_admin_commands(app)
-    
-    # Start scheduler
-    run_scheduler()
-    
-    # Start health check server in separate thread
-    health_thread = Thread(target=run_health_server, daemon=True)
-    health_thread.start()
-    
-    print("\n" + "="*50)
-    print("BOT STARTED SUCCESSFULLY")
-    print("="*50)
-    print("\nBot is now running...")
-    print("Monitoring file store channel for new videos")
-    print("Scheduler is posting videos automatically")
-    print("Health check server active on port", os.getenv('PORT', 8000))
-    print("\nPress Ctrl+C to stop\n")
-    
-    # Run the bot with flood wait handling
-    max_retries = 3
-    retry_count = 0
-    
-    while retry_count < max_retries:
-        try:
-            app.run()
-            break  # Success, exit loop
-            
-        except FloodWait as e:
-            wait_time = e.value
-            retry_count += 1
-            print(f"\nFlood Wait: Telegram requires {wait_time} seconds wait")
-            print(f"Attempt {retry_count}/{max_retries}")
-            print(f"Waiting {wait_time + 5} seconds before retry...")
-            
-            if retry_count >= max_retries:
-                print("\nMax retries reached. Please wait a few minutes and redeploy.")
-                print("Keeping health server alive...")
-                # Keep health server running
-                while True:
-                    time.sleep(60)
-            else:
-                time.sleep(wait_time + 5)
-                
-        except KeyboardInterrupt:
-            print("\n\nBot stopped by user")
-            break
-            
-        except Exception as e:
-            print(f"\n\nFatal error: {e}")
-            import traceback
-            traceback.print_exc()
-            
-            # Keep health server alive to prevent restart loop
-            print("\nKeeping health server alive...")
-            while True:
-                time.sleep(60)
+    try:
+        print("\n" + "="*60)
+        print("STREAMFLASH TELEGRAM BOT")
+        print("="*60)
+        
+        # Validate configuration
+        print("\n🔧 Validating configuration...")
+        if not validate_config():
+            print("\n❌ Configuration validation failed!")
+            print("Please check your environment variables in Koyeb")
+            sys.exit(1)
+        
+        print("✅ Configuration validated")
+        
+        # Create Pyrogram client
+        print("\n📱 Creating Pyrogram client...")
+        app = Client(
+            "streamflash_bot",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            bot_token=BOT_TOKEN,
+            workdir="."
+        )
+        print("✅ Pyrogram client created")
+        
+        # Set app instance for scheduler
+        print("\n⏰ Setting up scheduler...")
+        set_app_instance(app)
+        print("✅ Scheduler configured")
+        
+        # Setup handlers
+        print("\n🔧 Setting up handlers...")
+        setup_handlers(app)
+        print("✅ Handlers setup complete")
+        
+        # Setup admin commands
+        print("\n👤 Setting up admin commands...")
+        setup_admin_commands(app)
+        print("✅ Admin commands setup complete")
+        
+        # Start scheduler
+        print("\n⏰ Starting scheduler...")
+        run_scheduler()
+        print("✅ Scheduler thread started")
+        
+        # Start health check server
+        print("\n🏥 Starting health check server...")
+        health_thread = Thread(target=run_health_server, daemon=True)
+        health_thread.start()
+        print("✅ Health check server started")
+        
+        print("\n" + "="*60)
+        print("✅ BOT STARTED SUCCESSFULLY")
+        print("="*60)
+        print("\n💡 Bot is now running...")
+        print("📥 Monitoring file store channel for new videos")
+        print("⏰ Scheduler is posting videos automatically")
+        print("🏥 Health check server active on port", os.getenv('PORT', 8000))
+        print("\n🛑 Press Ctrl+C to stop\n")
+        
+        # Run the bot
+        print("🚀 Starting Pyrogram client...\n")
+        app.run()
+        
+    except KeyboardInterrupt:
+        print("\n\n🛑 Bot stopped by user")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n\n❌ FATAL ERROR!")
+        print(f"Error Type: {type(e).__name__}")
+        print(f"Error Message: {e}")
+        print("\nFull Traceback:")
+        traceback.print_exc()
+        
+        # Keep health server alive for debugging
+        print("\n⚠️ Keeping health server alive for debugging...")
+        print("Check Koyeb logs for this error message")
+        
+        import time
+        while True:
+            time.sleep(60)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n❌ CRITICAL ERROR IN MAIN!")
+        print(f"Error: {e}")
+        traceback.print_exc()
+        sys.exit(1)
     
