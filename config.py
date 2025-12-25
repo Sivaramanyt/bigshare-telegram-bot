@@ -1,5 +1,5 @@
 """
-Configuration settings for BigShare Telegram Bot
+Configuration settings for StreamFlash Telegram Bot
 Edit this file to customize bot behavior
 """
 
@@ -25,14 +25,11 @@ FILE_STORE_CHANNEL = int(os.getenv("FILE_STORE_CHANNEL", "0"))
 MAIN_CHANNEL = os.getenv("MAIN_CHANNEL", "")
 
 # ============================================
-# BIGSHARE CONFIGURATION
+# STREAMFLASH CONFIGURATION
 # ============================================
 
-# BigShare API Token (required)
-BIGSHARE_TOKEN = os.getenv("BIGSHARE_TOKEN", "")
-
-# Note: BIGSHARE_API_URL is now hardcoded in utils.py as per official API docs
-# Endpoint: https://bigshare.io/api/v1/videos/files
+STREAMFLASH_API_URL = "https://streamflash.sx/api/remote_upload.php"
+STREAMFLASH_API_KEY = os.getenv("STREAMFLASH_API_KEY", "")
 
 # ============================================
 # DATABASE CONFIGURATION
@@ -88,8 +85,8 @@ def validate_config():
     if not MAIN_CHANNEL:
         errors.append("MAIN_CHANNEL is required")
     
-    if not BIGSHARE_TOKEN:
-        errors.append("BIGSHARE_TOKEN is required")
+    if not STREAMFLASH_API_KEY:
+        errors.append("STREAMFLASH_API_KEY is required")
     
     if errors:
         print("❌ Configuration Errors:")
