@@ -1,6 +1,6 @@
 """
 Message handlers for Telegram bot
-StreamFlash.sx integration with corrected Telegram URL method
+StreamFlash.sx integration - Bot-compatible version
 """
 
 from pyrogram import Client, filters
@@ -16,6 +16,7 @@ from utils import (
 )
 from captions import get_admin_notification
 import os
+import requests
 
 async def download_telegram_video(message, filename):
     """Download video from Telegram message"""
@@ -29,7 +30,7 @@ async def download_telegram_video(message, filename):
 
 async def get_telegram_file_url(client, message):
     """
-    Get direct Telegram CDN URL for video file
+    Get direct Telegram CDN URL for video file using Bot API
     
     Args:
         client: Pyrogram client
@@ -43,22 +44,32 @@ async def get_telegram_file_url(client, message):
         if message.video:
             file = message.video
             file_id = file.file_id
+            file_size = file.file_size
         elif message.document:
             file = message.document
             file_id = file.file_id
+            file_size = file.file_size
         else:
             print("❌ No video or document in message")
             return None
         
-        print(f"   File ID: {file_id[:50]}...")
+        # Check file size (Telegram Bot API limit is 20MB)
+        if file_size > 20 * 1024 * 1024:  # 20MB
+            print(f"⚠️ File too large for Bot API: {file_size / (1024*1024):.2f} MB")
+            print(f"   Bot API limit: 20 MB")
+            return None
         
-        # Download media to get file info
-        # We need to use Telegram Bot API to get file_path
-        import requests
+        print(f"   File ID: {file_id[:30]}...")
+        print(f"   File Size: {file_size / (1024*1024):.2f} MB")
         
-        # Get file path using Bot API
+        # Use Telegram Bot API to get file path
         api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile"
-        response = requests.get(api_url, params={"file_id": file_id}, timeout=10)
+        
+        response = requests.get(
+            api_url, 
+            params={"file_id": file_id}, 
+            timeout=10
+        )
         
         if response.status_code == 200:
             data = response.json()
@@ -70,15 +81,20 @@ async def get_telegram_file_url(client, message):
                 telegram_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
                 
                 print(f"   ✅ Telegram URL obtained")
-                print(f"   Path: {file_path}")
+                print(f"   Path: {file_path[:50]}...")
                 return telegram_url
             else:
-                print(f"❌ Telegram API error: {data}")
+                error_desc = data.get("description", "Unknown error")
+                print(f"❌ Telegram API error: {error_desc}")
                 return None
         else:
-            print(f"❌ Failed to get file info: Status {response.status_code}")
+            print(f"❌ Failed to get file: HTTP {response.status_code}")
+            print(f"   Response: {response.text[:200]}")
             return None
         
+    except requests.exceptions.Timeout:
+        print(f"❌ Timeout getting file info from Telegram")
+        return None
     except Exception as e:
         print(f"❌ Error getting Telegram URL: {e}")
         import traceback
@@ -92,12 +108,13 @@ def setup_handlers(app):
     async def handle_new_video(client, message):
         """Handle new videos in file store channel"""
         
-        print(f"\n{'='*50}")
+        print(f"\n{'='*60}")
         print(f"📥 NEW VIDEO DETECTED")
-        print(f"{'='*50}")
+        print(f"{'='*60}")
         print(f"Chat: {message.chat.title if message.chat else 'Unknown'}")
         print(f"Chat ID: {message.chat.id}")
         print(f"Message ID: {message.id}")
+        print(f"Time: {message.date}")
         
         # Check for duplicates
         if check_duplicate(message.id):
@@ -119,18 +136,27 @@ def setup_handlers(app):
             direct_link = extract_direct_link(message)
             
             if direct_link:
-                print(f"🔗 Direct link detected: {direct_link}")
+                print(f"🔗 Direct link detected")
+                print(f"   URL: {direct_link[:60]}...")
                 upload_method = "remote_url"
                 
                 # Upload to StreamFlash using the URL
                 streamflash_link = upload_to_streamflash(video_url=direct_link)
                 
                 # Download for thumbnail extraction
-                video_path = await download_telegram_video(message, f"temp_downloads/video_{message.id}.mp4")
+                print(f"📥 Downloading for thumbnail...")
+                video_path = await download_telegram_video(
+                    message, 
+                    f"temp_downloads/video_{message.id}.mp4"
+                )
                 
             else:
-                print(f"📥 Telegram file detected, processing...")
+                print(f"📥 Telegram file detected")
                 upload_method = "telegram_file"
+                
+                # Get file size first
+                file_size = message.video.file_size if message.video else message.document.file_size
+                print(f"📦 File size: {file_size / (1024*1024):.2f} MB")
                 
                 # Get Telegram file URL for StreamFlash
                 print(f"🔗 Getting Telegram file URL...")
@@ -139,58 +165,72 @@ def setup_handlers(app):
                 if not telegram_url:
                     print("❌ Failed to get Telegram URL!")
                     
-                    # Notify admin
+                    # Notify admin with detailed info
                     try:
                         await client.send_message(
                             ADMIN_USER_ID,
-                            f"❌ Failed to get Telegram URL\n\n"
-                            f"Video: {video_title}\n"
-                            f"Message ID: {message.id}\n\n"
-                            f"Possible reasons:\n"
-                            f"• File too large (>20MB limit for Bot API)\n"
-                            f"• Temporary API issue\n"
-                            f"• Invalid file format"
+                            f"❌ **Failed to Get Telegram URL**\n\n"
+                            f"**Video:** {video_title}\n"
+                            f"**Message ID:** {message.id}\n"
+                            f"**File Size:** {file_size / (1024*1024):.2f} MB\n\n"
+                            f"**Possible Reasons:**\n"
+                            f"• File > 20MB (Bot API limit)\n"
+                            f"• Temporary Telegram API issue\n"
+                            f"• Invalid bot token\n\n"
+                            f"**Suggestion:** If file > 20MB, upload smaller videos or use direct URLs"
                         )
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"⚠️ Failed to notify admin: {e}")
                     return
                 
                 # Upload to StreamFlash using Telegram URL
-                print(f"📤 Uploading to StreamFlash via Telegram URL...")
+                print(f"📤 Uploading to StreamFlash...")
                 streamflash_link = upload_to_streamflash(video_url=telegram_url)
                 
                 # Download for thumbnail extraction
                 print(f"📥 Downloading for thumbnail...")
-                video_path = await download_telegram_video(message, f"temp_downloads/video_{message.id}.mp4")
+                video_path = await download_telegram_video(
+                    message, 
+                    f"temp_downloads/video_{message.id}.mp4"
+                )
             
             # Check if upload succeeded
             if not streamflash_link:
                 print("❌ StreamFlash upload failed!")
-                update_statistics("upload_failed", {"message_id": message.id, "title": video_title})
+                update_statistics("upload_failed", {
+                    "message_id": message.id, 
+                    "title": video_title,
+                    "method": upload_method
+                })
                 
-                # Notify admin
+                # Notify admin with actionable info
                 try:
                     await client.send_message(
                         ADMIN_USER_ID,
-                        f"❌ StreamFlash Upload Failed!\n\n"
-                        f"Video: {video_title}\n"
-                        f"Message ID: {message.id}\n\n"
-                        f"Check:\n"
+                        f"❌ **StreamFlash Upload Failed!**\n\n"
+                        f"**Video:** {video_title}\n"
+                        f"**Message ID:** {message.id}\n\n"
+                        f"**Check:**\n"
                         f"• StreamFlash API key valid\n"
                         f"• Video URL accessible\n"
-                        f"• StreamFlash service online"
+                        f"• StreamFlash service online\n\n"
+                        f"Check Koyeb logs for detailed error."
                     )
-                except:
-                    pass
+                except Exception as e:
+                    print(f"⚠️ Failed to notify admin: {e}")
                 
                 return
             
-            print(f"✅ StreamFlash Link: {streamflash_link}")
+            print(f"✅ StreamFlash Link obtained!")
+            print(f"   URL: {streamflash_link[:60]}...")
             
             # Extract thumbnail
             if video_path and os.path.exists(video_path):
                 print("🖼️ Extracting thumbnail...")
-                thumbnail_path = extract_thumbnail(video_path, f"thumb_{message.id}.jpg")
+                thumbnail_path = extract_thumbnail(
+                    video_path, 
+                    f"thumb_{message.id}.jpg"
+                )
                 
                 if thumbnail_path:
                     # Upload thumbnail to file store
@@ -201,7 +241,7 @@ def setup_handlers(app):
                             caption=f"🖼️ Thumbnail for message {message.id}"
                         )
                         thumb_file_id = thumb_msg.photo.file_id
-                        print(f"✅ Thumbnail uploaded")
+                        print(f"✅ Thumbnail uploaded to file store")
                     except Exception as e:
                         print(f"⚠️ Thumbnail upload failed: {e}")
             else:
@@ -217,11 +257,15 @@ def setup_handlers(app):
             }
             
             add_to_queue(video_data)
-            update_statistics("video_found", {"title": video_title, "method": upload_method})
+            update_statistics("video_found", {
+                "title": video_title, 
+                "method": upload_method
+            })
             
             queue_count = get_pending_count()
-            print(f"✅ Added to queue! Total pending: {queue_count}")
-            print(f"{'='*50}\n")
+            print(f"✅ Added to queue!")
+            print(f"   Queue size: {queue_count}")
+            print(f"{'='*60}\n")
             
             # Notify admin of success
             try:
@@ -231,19 +275,24 @@ def setup_handlers(app):
                 print(f"⚠️ Admin notification failed: {e}")
             
         except Exception as e:
-            print(f"❌ FATAL ERROR: {e}")
+            print(f"❌ FATAL ERROR in video processing!")
+            print(f"   Error: {e}")
             import traceback
             traceback.print_exc()
-            update_statistics("processing_error", {"error": str(e), "message_id": message.id})
             
-            # Notify admin of error
+            update_statistics("processing_error", {
+                "error": str(e), 
+                "message_id": message.id
+            })
+            
+            # Notify admin of fatal error
             try:
                 await client.send_message(
                     ADMIN_USER_ID,
-                    f"❌ Processing Error!\n\n"
-                    f"Video: {video_title}\n"
-                    f"Message ID: {message.id}\n"
-                    f"Error: {str(e)[:300]}\n\n"
+                    f"❌ **Processing Error!**\n\n"
+                    f"**Video:** {video_title}\n"
+                    f"**Message ID:** {message.id}\n"
+                    f"**Error:** `{str(e)[:200]}`\n\n"
                     f"Check Koyeb logs for full traceback."
                 )
             except:
@@ -253,25 +302,16 @@ def setup_handlers(app):
             # Cleanup temporary files
             cleanup_temp_files(video_path, thumbnail_path)
     
-    # Test channel access
+    # Test channel access (BOT-COMPATIBLE VERSION)
     @app.on_message(filters.command("test") & filters.user(ADMIN_USER_ID))
     async def test_channel_access(client, message):
-        """Test file store channel access"""
+        """Test file store channel access - bot compatible"""
         try:
+            # Get channel info
             chat = await client.get_chat(FILE_STORE_CHANNEL)
             
-            # Get recent messages
-            try:
-                messages = []
-                count = 0
-                async for msg in client.get_chat_history(FILE_STORE_CHANNEL, limit=5):
-                    count += 1
-                    msg_type = "video" if msg.video else "document" if msg.document else "text"
-                    messages.append(f"• ID {msg.id}: {msg_type}")
-                
-                recent_msgs = "\n".join(messages) if messages else "No messages"
-            except Exception as e:
-                recent_msgs = f"Cannot read: {e}"
+            # Bot cannot use get_chat_history, so we skip that part
+            recent_msgs = "✅ Bot can access channel\n(Note: Bots cannot read message history)"
             
             await message.reply(
                 f"✅ **Channel Access Test**\n\n"
@@ -279,16 +319,21 @@ def setup_handlers(app):
                 f"Title: {chat.title}\n"
                 f"ID: `{chat.id}`\n"
                 f"Type: {chat.type}\n\n"
-                f"**Recent Messages:**\n{recent_msgs}\n\n"
+                f"**Status:**\n{recent_msgs}\n\n"
                 f"**Configuration:**\n"
                 f"Configured: `{FILE_STORE_CHANNEL}`\n"
-                f"Match: {'✅' if chat.id == FILE_STORE_CHANNEL else '❌'}"
+                f"Match: {'✅ Yes' if chat.id == FILE_STORE_CHANNEL else '❌ No'}"
             )
         except Exception as e:
             await message.reply(
                 f"❌ **Channel Access Failed**\n\n"
-                f"Error: `{e}`\n\n"
-                f"Configured ID: `{FILE_STORE_CHANNEL}`"
+                f"**Error:** `{e}`\n\n"
+                f"**Configured ID:** `{FILE_STORE_CHANNEL}`\n\n"
+                f"**Troubleshooting:**\n"
+                f"• Add bot to channel\n"
+                f"• Make bot admin\n"
+                f"• Check channel ID correct\n"
+                f"• ID should start with -100"
             )
     
     # Debug configuration
@@ -305,52 +350,58 @@ def setup_handlers(app):
             f"**Admin:**\n"
             f"You: `{message.from_user.id}`\n"
             f"Config: `{ADMIN_USER_ID}`\n"
-            f"Match: {'✅' if message.from_user.id == ADMIN_USER_ID else '❌'}\n\n"
+            f"Match: {'✅ Yes' if message.from_user.id == ADMIN_USER_ID else '❌ No'}\n\n"
             f"**StreamFlash:**\n"
-            f"Key: `{STREAMFLASH_API_KEY[:20]}...`\n\n"
+            f"Key: `{STREAMFLASH_API_KEY[:20]}...`\n"
+            f"Length: {len(STREAMFLASH_API_KEY)} chars\n\n"
             f"**Status:**\n"
             f"Running: ✅ Active\n"
             f"Handlers: ✅ Loaded"
         )
     
-    # Test StreamFlash API
+    # Test StreamFlash API with sample video
     @app.on_message(filters.command("testapi") & filters.user(ADMIN_USER_ID))
     async def test_streamflash_api(client, message):
-        """Test StreamFlash API"""
-        await message.reply("🧪 Testing StreamFlash API...\n\nPlease wait...")
+        """Test StreamFlash API with sample video"""
+        msg = await message.reply("🧪 **Testing StreamFlash API...**\n\nPlease wait...")
         
-        # Small public test video
+        # Small public test video (1MB)
         test_url = "https://sample-videos.com/video321/mp4/240/big_buck_bunny_240p_1mb.mp4"
         
         try:
-            print(f"\n{'='*50}")
-            print(f"🧪 API TEST STARTED")
-            print(f"{'='*50}")
+            print(f"\n{'='*60}")
+            print(f"🧪 STREAMFLASH API TEST")
+            print(f"{'='*60}")
+            print(f"Test URL: {test_url}")
             
             streamflash_link = upload_to_streamflash(video_url=test_url)
             
-            print(f"{'='*50}")
-            print(f"🧪 API TEST COMPLETED")
-            print(f"{'='*50}\n")
+            print(f"{'='*60}")
+            print(f"🧪 TEST COMPLETED")
+            print(f"{'='*60}\n")
             
             if streamflash_link:
-                await message.reply(
+                await msg.edit(
                     f"✅ **API Test Successful!**\n\n"
-                    f"Test URL: {test_url}\n\n"
-                    f"StreamFlash Link:\n{streamflash_link}\n\n"
-                    f"✅ API is working!"
+                    f"**Test Video:**\n{test_url}\n\n"
+                    f"**StreamFlash Link:**\n{streamflash_link}\n\n"
+                    f"✅ **API is working correctly!**"
                 )
             else:
-                await message.reply(
+                await msg.edit(
                     f"❌ **API Test Failed**\n\n"
-                    f"No link returned.\n\n"
+                    f"Upload returned no link.\n\n"
+                    f"**Possible Issues:**\n"
+                    f"• Invalid API key\n"
+                    f"• StreamFlash service down\n"
+                    f"• Network connectivity issue\n\n"
                     f"Check Koyeb logs for details."
                 )
         except Exception as e:
-            await message.reply(
+            await msg.edit(
                 f"❌ **API Test Error**\n\n"
-                f"Error: `{e}`\n\n"
-                f"Check:\n"
+                f"**Error:** `{str(e)[:200]}`\n\n"
+                f"**Check:**\n"
                 f"• API key correct\n"
                 f"• Service online\n"
                 f"• Network OK"
@@ -362,14 +413,14 @@ def setup_handlers(app):
         """Get channel ID from forwarded message"""
         if message.forward_from_chat:
             await message.reply(
-                f"📨 **Channel Info**\n\n"
-                f"Title: {message.forward_from_chat.title}\n"
-                f"ID: `{message.forward_from_chat.id}`\n"
-                f"Type: {message.forward_from_chat.type}\n\n"
-                f"**Use in .env:**\n"
+                f"📨 **Channel Information**\n\n"
+                f"**Title:** {message.forward_from_chat.title}\n"
+                f"**ID:** `{message.forward_from_chat.id}`\n"
+                f"**Type:** {message.forward_from_chat.type}\n\n"
+                f"**Use in Koyeb:**\n"
                 f"`FILE_STORE_CHANNEL={message.forward_from_chat.id}`"
             )
     
     print("✅ Handlers setup complete")
     print(f"✅ Monitoring channel: {FILE_STORE_CHANNEL}")
-        
+    
